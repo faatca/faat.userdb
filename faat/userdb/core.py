@@ -129,11 +129,14 @@ class UserDB:
             raise UnknownUserError
         return row["user_id"]
 
+    def close(self):
+        self.db.close()
+
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self.db.close()
+        self.close()
 
 
 class Error(Exception):
