@@ -100,7 +100,7 @@ class UserDB:
             raise UnknownUserError
         if not pwhash.verify(password, row["password"]):
             raise InvalidPasswordError
-        if row.status != "active":
+        if row["status"] != "active":
             raise AuthenticationError
         return str(row["user_id"])
 

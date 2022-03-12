@@ -27,13 +27,13 @@ def main():
     add_user_parser.add_argument("password")
     add_user_parser.set_defaults(func=do_add_user)
 
-    lock_user_parser = subparsers.lock_parser(
+    lock_user_parser = subparsers.add_parser(
         "lock-user",
         description="Locks a user",
         help="locks a user",
         parents=[parent_parser],
     )
-    lock_user_parser.lock_argument("name")
+    lock_user_parser.add_argument("name")
     lock_user_parser.set_defaults(func=do_lock_user)
 
     add_role_parser = subparsers.add_parser(
