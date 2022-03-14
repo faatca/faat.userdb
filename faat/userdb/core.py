@@ -57,15 +57,15 @@ class UserDB:
     def add_user(self, username, password):
         try:
             with self.db:
-                user_row = self.db.execute(
-                    "INSERT INTO user (added_date, status) VALUES (?, ?) RETURNING ID",
+                user_id = self.db.execute(
+                    "INSERT INTO user (added_date, status) VALUES (?, ?)",
                     (datetime.datetime.utcnow().isoformat(), "active"),
-                ).fetchone()
+                ).lastrowid
                 self.db.execute(
                     "INSERT INTO credential (user_id, username, password) VALUES (?, ?, ?)",
-                    (user_row["id"], username, pwhash.format_password_hash(password)),
+                    (user_id, username, pwhash.format_password_hash(password)),
                 )
-                return user_row["id"]
+                return user_id
         except sqlite3.IntegrityError:
             raise AlreadyExistsError
 
@@ -78,7 +78,7 @@ class UserDB:
         ).fetchone()
         if not user_row:
             raise UnknownUserError
-        return user_row.user_id
+        return user_row["user_id"]
 
     def add_role(self, user_id, role):
         try:
@@ -126,7 +126,7 @@ class UserDB:
             "SELECT user_id FROM apikey WHERE apikey = ?", (hashed_token,)
         ).fetchone()
         if not row:
-            raise UnknownUserError
+            raise AuthenticationError
         return row["user_id"]
 
     def close(self):
