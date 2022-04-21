@@ -27,6 +27,23 @@ def main():
     add_user_parser.add_argument("password")
     add_user_parser.set_defaults(func=do_add_user)
 
+    invite_parser = subparsers.add_parser(
+        "invite",
+        description="Creates an invitation for a new user",
+        help="creates an invitation for a new user",
+        parents=[parent_parser]
+    )
+    invite_parser.set_defaults(func=do_invite)
+
+    revoke_invite_parser = subparsers.add_parser(
+        "revoke-invite",
+        description="Revokes an invitation for a new user",
+        help="revokes an invitation for a new user",
+        parents=[parent_parser]
+    )
+    revoke_invite_parser.add_argument("token")
+    revoke_invite_parser.set_defaults(func=do_revoke_invite)
+
     lock_user_parser = subparsers.add_parser(
         "lock-user",
         description="Locks a user",
@@ -66,6 +83,17 @@ def main():
 def do_add_user(args):
     with connect(args.target) as db:
         db.add_user(args.username, args.password)
+
+
+def do_invite(args):
+    with connect(args.target) as db:
+        user_id, token = db.create_new_user_invitation()
+    print("Token:", token)
+
+
+def do_revoke_invite(args):
+    with connect(args.target) as db:
+        db.revoke_invitation(args.token)
 
 
 def do_lock_user(args):
