@@ -68,6 +68,47 @@ class UserDB:
     def __init__(self, db):
         self.db = db
 
+    def find_users(self):
+        user_rows = self.db.execute("select id, added_date, status from user")
+        for user_row in user_rows:
+            credential_rows = self.db.execute(
+                "select username, password from credential where user_id = ?", (user_row["id"],)
+            )
+            usernames = [r["username"] for r in credential_rows]
+
+            apikey_rows = self.db.execute(
+                "select label from apikey where user_id = ? and revoked is null", (user_row["id"],)
+            )
+            apikeys = [r["label"] for r in apikey_rows]
+
+            role_rows = self.db.execute(
+                "select role from role where user_id = ?", (user_row["id"],)
+            )
+            roles = [r["role"] for r in role_rows]
+
+            reset_rows = self.db.execute(
+                """
+                select count(*) as c
+                from reset_request
+                where
+                  user_id = ? and
+                  redeemed is null and
+                  revoked is null and
+                  expiry_date > ?
+                """,
+                (user_row["id"], datetime.datetime.utcnow()),
+            )
+            reset_row_count = sum(row["c"] for row in reset_rows)
+
+            yield {
+                "id": user_row["id"],
+                "usernames": usernames,
+                "apikeys": apikeys,
+                "resets": reset_row_count,
+                "status": user_row["status"],
+                "roles": roles,
+            }
+
     def add_user(self, username, password):
         try:
             with self.db:

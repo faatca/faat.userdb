@@ -1,5 +1,6 @@
 import argparse
 import logging
+import json
 from pathlib import Path
 import sys
 from .core import connect
@@ -50,8 +51,17 @@ def main():
         help="locks a user",
         parents=[parent_parser],
     )
-    lock_user_parser.add_argument("name")
+    lock_user_parser.add_argument("username")
     lock_user_parser.set_defaults(func=do_lock_user)
+
+    unlock_user_parser = subparsers.add_parser(
+        "unlock-user",
+        description="Unlocks a user",
+        help="unlocks a user",
+        parents=[parent_parser],
+    )
+    unlock_user_parser.add_argument("username")
+    unlock_user_parser.set_defaults(func=do_unlock_user)
 
     add_role_parser = subparsers.add_parser(
         "add-role",
@@ -62,6 +72,14 @@ def main():
     add_role_parser.add_argument("username")
     add_role_parser.add_argument("role")
     add_role_parser.set_defaults(func=do_add_role)
+
+    list_users_parser = subparsers.add_parser(
+        "list-users",
+        description="Lists the users",
+        help="lists users",
+        parents=[parent_parser],
+    )
+    list_users_parser.set_defaults(func=do_list_users)
 
     args = parser.parse_args()
 
@@ -98,13 +116,26 @@ def do_revoke_invite(args):
 
 def do_lock_user(args):
     with connect(args.target) as db:
-        db.lock_user(args.username)
+        id = db.get_user_id(args.username)
+        db.lock_user(id)
+
+
+def do_unlock_user(args):
+    with connect(args.target) as db:
+        id = db.get_user_id(args.username)
+        db.unlock_user(id)
 
 
 def do_add_role(args):
     with connect(args.target) as db:
         id = db.get_user_id(args.username)
         db.add_role(id, args.role)
+
+
+def do_list_users(args):
+    with connect(args.target) as db:
+        users = list(db.find_users())
+        print(json.dumps(users, indent=2))
 
 
 if __name__ == "__main__":

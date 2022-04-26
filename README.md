@@ -21,7 +21,6 @@ py -m unittest
 Some future things to consider...
 
 *   Add more commands to the command line script.
-    *   invite: create an invitation code that can be passed to a user to set up their own credentials
     *   cleanup: delete old apikeys and invitations
     *   revoke-role: delete a role from a user
 *   Schema management and migration
