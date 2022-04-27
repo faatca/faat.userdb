@@ -20,9 +20,6 @@ py -m unittest
 
 Some future things to consider...
 
-*   Add more commands to the command line script.
-    *   cleanup: delete old apikeys and invitations
-    *   revoke-role: delete a role from a user
 *   Schema management and migration
     *   add table and record to track the current schema version.
     *   add init command to initialize a new db
