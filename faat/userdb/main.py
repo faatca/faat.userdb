@@ -32,7 +32,7 @@ def main():
         "invite",
         description="Creates an invitation for a new user",
         help="creates an invitation for a new user",
-        parents=[parent_parser]
+        parents=[parent_parser],
     )
     invite_parser.set_defaults(func=do_invite)
 
@@ -40,7 +40,7 @@ def main():
         "revoke-invite",
         description="Revokes an invitation for a new user",
         help="revokes an invitation for a new user",
-        parents=[parent_parser]
+        parents=[parent_parser],
     )
     revoke_invite_parser.add_argument("token")
     revoke_invite_parser.set_defaults(func=do_revoke_invite)
@@ -72,6 +72,17 @@ def main():
     add_role_parser.add_argument("username")
     add_role_parser.add_argument("role")
     add_role_parser.set_defaults(func=do_add_role)
+
+    clean_parser = subparsers.add_parser(
+        "clean",
+        description="Cleans out old entries from db",
+        help="cleans out old entries from db",
+        parents=[parent_parser],
+    )
+    clean_parser.add_argument(
+        "--days", type=check_positive, default="7", help="the number of days to keep for history"
+    )
+    clean_parser.set_defaults(func=do_clean)
 
     list_users_parser = subparsers.add_parser(
         "list-users",
@@ -132,10 +143,22 @@ def do_add_role(args):
         db.add_role(id, args.role)
 
 
+def do_clean(args):
+    with connect(args.target) as db:
+        db.clean(args.days)
+
+
 def do_list_users(args):
     with connect(args.target) as db:
         users = list(db.find_users())
         print(json.dumps(users, indent=2))
+
+
+def check_positive(value):
+    ivalue = int(value)
+    if ivalue < 0:
+        raise argparse.ArgumentTypeError(f"{ivalue} is less than zero")
+    return ivalue
 
 
 if __name__ == "__main__":

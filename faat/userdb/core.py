@@ -1,10 +1,13 @@
 import datetime
 from hashlib import sha256
+import logging
 import secrets
 import sqlite3
 
 from . import pwhash
 from . import errors
+
+log = logging.getLogger(__name__)
 
 
 def connect(path):
@@ -69,31 +72,31 @@ class UserDB:
         self.db = db
 
     def find_users(self):
-        user_rows = self.db.execute("select id, added_date, status from user")
+        user_rows = self.db.execute("SELECT id, added_date, status FROM user")
         for user_row in user_rows:
             credential_rows = self.db.execute(
-                "select username, password from credential where user_id = ?", (user_row["id"],)
+                "SELECT username, password FROM credential WHERE user_id = ?", (user_row["id"],)
             )
             usernames = [r["username"] for r in credential_rows]
 
             apikey_rows = self.db.execute(
-                "select label from apikey where user_id = ? and revoked is null", (user_row["id"],)
+                "SELECT label FROM apikey WHERE user_id = ? AND revoked IS NULL", (user_row["id"],)
             )
             apikeys = [r["label"] for r in apikey_rows]
 
             role_rows = self.db.execute(
-                "select role from role where user_id = ?", (user_row["id"],)
+                "SELECT role FROM role WHERE user_id = ?", (user_row["id"],)
             )
             roles = [r["role"] for r in role_rows]
 
             reset_rows = self.db.execute(
                 """
-                select count(*) as c
-                from reset_request
-                where
-                  user_id = ? and
-                  redeemed is null and
-                  revoked is null and
+                SELECT count(*) AS c
+                FROM reset_request
+                WHERE
+                  user_id = ? AND
+                  redeemed IS NULL AND
+                  revoked IS NULL AND
                   expiry_date > ?
                 """,
                 (user_row["id"], datetime.datetime.utcnow()),
@@ -109,8 +112,48 @@ class UserDB:
                 "roles": roles,
             }
 
+    def clean(self, retention_days=7):
+        cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=retention_days)
+        log.debug(f"Cleaning expired entries before {retention_days} days: {cutoff}")
+        with self.db:
+            cursor = self.db.execute(
+                """
+                DELETE FROM apikey WHERE revoked < ?
+                """,
+                (cutoff,),
+            )
+            log.debug(f"Cleaned {cursor.rowcount} revoked API keys")
+
+            cursor = self.db.execute(
+                """
+                DELETE FROM reset_request
+                WHERE redeemed < ? OR revoked < ? OR expiry_date < ?
+                """,
+                (cutoff, cutoff, cutoff),
+            )
+            log.debug(f"Cleaned {cursor.rowcount} invitations or password reset requests")
+
+            with self.db:
+                user_rows = self.db.execute(
+                    """
+                    SELECT id FROM user
+                    WHERE id not in (
+                        SELECT user_id FROM credential
+                        UNION
+                        SELECT user_id FROM apikey
+                        UNION
+                        SELECT user_id FROM reset_request
+                    )
+                    """
+                )
+                param_rows = list(user_rows)
+                log.debug(f"Cleaning {len(param_rows)} users")
+                self.db.executemany("DELETE FROM role WHERE user_id = ?", param_rows)
+                self.db.executemany("DELETE FROM user WHERE id = ?", param_rows)
+
     def add_user(self, username, password):
         try:
+            log.debug(f"Adding new user: {username}")
             with self.db:
                 user_id = self.db.execute(
                     "INSERT INTO user (added_date, status) VALUES (?, ?)",
@@ -122,10 +165,12 @@ class UserDB:
                 )
                 return user_id
         except sqlite3.IntegrityError:
+            log.debug(f"Failed to add user: {username}")
             raise errors.AlreadyExistsError
 
     def create_new_user_invitation(self):
         try:
+            log.debug("Creating new invitation")
             with self.db:
                 user_id = self.db.execute(
                     "INSERT INTO user (added_date, status) VALUES (?, ?)",
@@ -144,11 +189,13 @@ class UserDB:
                         (datetime.datetime.utcnow() + datetime.timedelta(days=7)).isoformat(),
                     ),
                 )
-                return user_id, token
+            log.debug(f"Created invitation for new user: {user_id}")
+            return user_id, token
         except sqlite3.IntegrityError:
             raise errors.AlreadyExistsError
 
     def redeem_invitation(self, token, username, password):
+        log.debug(f"Trying to redeem invitation as {username}")
         hashed_token = sha256(token.encode()).hexdigest()
         with self.db:
             row = self.db.execute(
@@ -166,6 +213,8 @@ class UserDB:
                 raise errors.ExpiryError
             if row["status"] != ACTIVE_STATUS:
                 raise errors.AuthenticationError
+
+            log.debug("Found invitation, adding credentials")
             self.db.execute(
                 "INSERT INTO credential (user_id, username, password) VALUES (?, ?, ?)",
                 (row["user_id"], username, pwhash.format_password_hash(password)),
@@ -176,39 +225,51 @@ class UserDB:
             )
 
     def create_password_reset(self, user_id):
+        log.debug(f"Issuing password reset for user {user_id}")
         token = secrets.token_urlsafe()
         hashed_token = sha256(token.encode()).hexdigest()
-        self.db.execute(
-            "INSERT INTO reset_request (user_id, hash, issued_date, expiry_date) VALUES (?, ?, ?, ?)",
-            (
-                user_id,
-                hashed_token,
-                datetime.datetime.utcnow().isoformat(),
-                datetime.datetime.utcnow() + datetime.timedelta(days=7),
-            ),
-        )
+        with self.db:
+            self.db.execute(
+                "INSERT INTO reset_request (user_id, hash, issued_date, expiry_date) VALUES (?, ?, ?, ?)",
+                (
+                    user_id,
+                    hashed_token,
+                    datetime.datetime.utcnow().isoformat(),
+                    datetime.datetime.utcnow() + datetime.timedelta(days=7),
+                ),
+            )
         return token
 
     def revoke_invitation(self, token):
         hashed_token = sha256(token.encode()).hexdigest()
-        self.db.execute(
-            """
-            UPDATE reset_request
-            SET revoked = ?
-            WHERE hash = ? AND revoked IS NULL AND redeemed is null
-            """,
-            (datetime.datetime.now(), hashed_token),
-        )
+        with self.db:
+            cursor = self.db.execute(
+                """
+                UPDATE reset_request
+                SET revoked = ?
+                WHERE hash = ? AND revoked IS NULL AND redeemed IS NULL
+                """,
+                (datetime.datetime.utcnow(), hashed_token),
+            )
+            if cursor.rowcount:
+                log.debug("Revoked invitation")
+            else:
+                log.debug("No invitation found to revoke")
 
     def revoke_password_resets(self, user_id):
-        self.db.execute(
-            """
-            UPDATE reset_request
-            SET revoked = ?
-            WHERE user_id = ? AND revoked IS NULL AND redeemed is null
-            """,
-            (datetime.datetime.now(), user_id),
-        )
+        with self.db:
+            cursor = self.db.execute(
+                """
+                UPDATE reset_request
+                SET revoked = ?
+                WHERE user_id = ? AND revoked IS NULL AND redeemed IS NULL
+                """,
+                (datetime.datetime.utcnow(), user_id),
+            )
+            if cursor.rowcount:
+                log.debug("Revoked password reset")
+            else:
+                log.debug("No password reset found to revoke")
 
     def redeem_password_reset(self, token, password):
         hashed_token = sha256(token.encode()).hexdigest()
@@ -235,10 +296,14 @@ class UserDB:
             )
 
     def lock_user(self, user_id):
-        self.db.execute("UPDATE user SET status = 'locked' WHERE id = ?", (user_id,))
+        log.debug(f"Locking access for user {user_id}")
+        with self.db:
+            self.db.execute("UPDATE user SET status = 'locked' WHERE id = ?", (user_id,))
 
     def unlock_user(self, user_id):
-        self.db.execute("UPDATE user SET status = 'active' WHERE id = ?", (user_id,))
+        log.debug(f"Unlocking access for user {user_id}")
+        with self.db:
+            self.db.execute("UPDATE user SET status = 'active' WHERE id = ?", (user_id,))
 
     def get_user_id(self, username):
         user_row = self.db.execute(
@@ -249,13 +314,17 @@ class UserDB:
         return user_row["user_id"]
 
     def add_role(self, user_id, role):
+        log.debug(f"Adding {role} to user {user_id}")
         try:
-            self.db.execute("INSERT INTO role (user_id, role) VALUES (?, ?)", (user_id, role))
+            with self.db:
+                self.db.execute("INSERT INTO role (user_id, role) VALUES (?, ?)", (user_id, role))
         except sqlite3.IntegrityError:
             raise errors.AlreadyExistsError
 
     def revoke_role(self, user_id, role):
-        self.db.execute("DELETE FROM role WHERE user_id = ? and role = ?", (user_id, role))
+        log.debug(f"Removing {role} role from {user_id}")
+        with self.db:
+            self.db.execute("DELETE FROM role WHERE user_id = ? and role = ?", (user_id, role))
 
     def get_roles(self, user_id):
         sql = "SELECT role FROM role WHERE user_id = ?"
@@ -284,26 +353,30 @@ class UserDB:
     def create_apikey(self, user_id, label=None):
         token = secrets.token_urlsafe()
         hashed_token = sha256(token.encode()).hexdigest()
-        self.db.execute(
-            "INSERT INTO apikey (user_id, apikey, label, issued_date) VALUES (?, ?, ?, ?)",
-            (
-                user_id,
-                hashed_token,
-                label,
-                datetime.datetime.utcnow().isoformat(),
-            ),
-        )
+        with self.db:
+            log.debug(f"Issuing API key {label} for user {user_id}")
+            self.db.execute(
+                "INSERT INTO apikey (user_id, apikey, label, issued_date) VALUES (?, ?, ?, ?)",
+                (
+                    user_id,
+                    hashed_token,
+                    label,
+                    datetime.datetime.utcnow().isoformat(),
+                ),
+            )
         return token
 
     def revoke_apikey(self, user_id, label):
-        self.db.execute(
-            """
-            UPDATE apikey
-            SET revoked = ?
-            WHERE user_id = ? and label = ? and revoked is null
-            """,
-            (datetime.datetime.utcnow().isoformat(), user_id, label),
-        )
+        log.debug(f"Revoking {label} apikey for user {user_id}")
+        with self.db:
+            self.db.execute(
+                """
+                UPDATE apikey
+                SET revoked = ?
+                WHERE user_id = ? and label = ? and revoked IS NULL
+                """,
+                (datetime.datetime.utcnow().isoformat(), user_id, label),
+            )
 
     def authenticate_apikey(self, apikey):
         if not apikey:
